@@ -2,86 +2,157 @@ const btn = document.getElementById('btnBuscar');
 const input = document.getElementById('buscador');
 const contenedor = document.getElementById('resultados');
 
+// Circuit Breaker
+class CircuitBreaker {
+    constructor(requestFunction, options = {}) {
+        this.requestFunction = requestFunction;
+        this.failureThreshold = options.failureThreshold || 3;
+        this.recoveryTimeout = options.recoveryTimeout || 10000;
+
+        this.state = 'CLOSED';
+        this.failureCount = 0;
+        this.nextAttempt = Date.now();
+    }
+
+    async fire(...args) {
+        if (this.state === 'OPEN') {
+            if (Date.now() > this.nextAttempt) {
+                this.state = 'HALF_OPEN';
+                console.log('Circuit Breaker: Estado HALF-OPEN (Probando conexión...)');
+            } else {
+                const timeLeft = Math.ceil((this.nextAttempt - Date.now()) / 1000);
+                const error = new Error(`El servicio no está disponible temporalmente. Intenta de nuevo en ${timeLeft}s.`);
+                error.isCircuitBreakerOpen = true;
+                throw error;
+            }
+        }
+
+        try {
+            const response = await this.requestFunction(...args);
+            this.success();
+            return response;
+        } catch (error) {
+            this.failure();
+            throw error;
+        }
+    }
+
+    success() {
+        this.failureCount = 0;
+        if (this.state !== 'CLOSED') {
+            this.state = 'CLOSED';
+            console.log('Circuit Breaker: Estado CLOSED (Servicio recuperado)');
+        }
+    }
+
+    failure() {
+        this.failureCount++;
+        console.warn(`Circuit Breaker: Fallo detectado (${this.failureCount}/${this.failureThreshold})`);
+
+        if (this.failureCount >= this.failureThreshold) {
+            this.state = 'OPEN';
+            this.nextAttempt = Date.now() + this.recoveryTimeout;
+            console.error(`Circuit Breaker: Estado OPEN (Bloqueando peticiones por ${this.recoveryTimeout / 1000}s)`);
+        }
+    }
+}
+
 // Cargar datos JSONP
 function cargarJSONP(url) {
     return new Promise((resolve, reject) => {
         const nombreCallback = 'deezer_callback_' + Math.round(100000 * Math.random());
 
-        window[nombreCallback] = function (data) {
+        // Timeout para evitar que se quede colgado eternamente si la red falla
+        const timeoutId = setTimeout(() => {
+            limpiar();
+            reject(new Error('Tiempo de espera agotado (Timeout)'));
+        }, 5000);
+
+        function limpiar() {
             delete window[nombreCallback];
-            document.body.removeChild(script);
-            resolve(data);
+            if (script.parentNode) {
+                document.body.removeChild(script);
+            }
+            clearTimeout(timeoutId);
+        }
+
+        window[nombreCallback] = function (data) {
+            limpiar();
+            if (data.error) {
+                reject(new Error(data.error.message || 'Error en la API de Deezer'));
+            } else {
+                resolve(data);
+            }
         };
 
         const script = document.createElement('script');
         script.src = `${url}&output=jsonp&callback=${nombreCallback}`;
         script.onerror = () => {
-            delete window[nombreCallback];
-            document.body.removeChild(script);
-            reject(new Error('Falló la carga JSONP'));
+            limpiar();
+            reject(new Error('Error de red al cargar JSONP'));
         };
         document.body.appendChild(script);
     });
 }
 
-// Buscar artista y canciones
-async function buscarArtista(nombreArtista) {
-    try {
-        const urlBusqueda = `https://api.deezer.com/search/artist?q=${encodeURIComponent(nombreArtista)}`;
+async function realizarBusqueda(busqueda) {
+    const urlBusqueda = `https://api.deezer.com/search/artist?q=${encodeURIComponent(busqueda)}`;
+    const dataBusqueda = await cargarJSONP(urlBusqueda);
 
-        const dataBusqueda = await cargarJSONP(urlBusqueda);
-
-        if (!dataBusqueda.data || dataBusqueda.data.length === 0) {
-            throw new Error("Artista no encontrado");
-        }
-
-        const artistaExacto = dataBusqueda.data[0];
-        // console.log(`Artista encontrado: ${artistaExacto.name} (ID: ${artistaExacto.id})`);
-
-        const urlTracks = `https://api.deezer.com/artist/${artistaExacto.id}/top?limit=50`;
-        const dataTracks = await cargarJSONP(urlTracks);
-
-        if (dataTracks.error) {
-            throw new Error(dataTracks.error.message);
-        }
-
-        // console.log("Canciones encontradas:", dataTracks.data);
-        return dataTracks.data;
-
-    } catch (error) {
-        // console.error("Hubo un problema:", error);
-        return null;
+    if (!dataBusqueda.data || dataBusqueda.data.length === 0) {
+        throw new Error("Artista no encontrado");
     }
+
+    const artistaExacto = dataBusqueda.data[0];
+    const urlTracks = `https://api.deezer.com/artist/${artistaExacto.id}/top?limit=20`;
+    const dataTracks = await cargarJSONP(urlTracks);
+
+    if (dataTracks.error) {
+        throw new Error(dataTracks.error.message);
+    }
+
+    return dataTracks.data;
 }
 
-// buscarArtista("Daft Punk");
-
+const buscadorCircuitBreaker = new CircuitBreaker(realizarBusqueda, {
+    failureThreshold: 3,
+    recoveryTimeout: 10000
+});
 btn.addEventListener('click', async () => {
     const busqueda = input.value;
     if (!busqueda) return;
 
-    contenedor.innerHTML = 'Cargando...';
+    contenedor.innerHTML = '<div class="loader">Cargando...</div>';
 
-    const canciones = await buscarArtista(busqueda);
+    try {
+        const canciones = await buscadorCircuitBreaker.fire(busqueda);
 
-    if (!canciones || canciones.length === 0) {
-        contenedor.innerHTML = '<p>No se encontraron resultados o hubo un error.</p>';
-        return;
+        if (!canciones || canciones.length === 0) {
+            contenedor.innerHTML = '<p>No se encontraron resultados.</p>';
+            return;
+        }
+
+        contenedor.innerHTML = '';
+        canciones.forEach(cancion => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <img src="${cancion.album.cover_medium}" alt="${cancion.title}">
+                <h3>${cancion.title}</h3>
+                <p>${cancion.artist.name}</p>
+                <audio controls src="${cancion.preview}"></audio>
+            `;
+            contenedor.appendChild(card);
+        });
+
+    } catch (error) {
+        console.error(error);
+        if (error.isCircuitBreakerOpen) {
+            contenedor.innerHTML = `<p style="color: red; font-weight: bold;">⚠️ Sistema pausado: ${error.message}</p>`;
+        } else {
+            contenedor.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+        }
     }
-
-    contenedor.innerHTML = '';
-
-    canciones.forEach(cancion => {
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML = `
-            <img src="${cancion.album.cover_medium}" alt="${cancion.title}">
-            <h3>${cancion.title}</h3>
-            <p>${cancion.artist.name}</p>
-            <audio controls src="${cancion.preview}"></audio>
-        `;
-        contenedor.appendChild(card);
-    });
 });
 
 input.addEventListener('keypress', (e) => {
