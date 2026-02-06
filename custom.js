@@ -47,12 +47,14 @@ class CircuitBreaker {
 
     failure() {
         this.failureCount++;
-        console.warn(`Circuit Breaker: Fallo detectado (${this.failureCount}/${this.failureThreshold})`);
+        // Log estilizado: Naranja para advertencia
+        console.log(`%cCircuit Breaker: Fallo ${this.failureCount}/${this.failureThreshold}`, 'color: red;');
 
         if (this.failureCount >= this.failureThreshold) {
             this.state = 'OPEN';
             this.nextAttempt = Date.now() + this.recoveryTimeout;
-            console.error(`Circuit Breaker: Estado OPEN (Bloqueando peticiones por ${this.recoveryTimeout / 1000}s)`);
+            // Log estilizado: Rojo pero como log informativo
+            console.log(`%cCircuit Breaker: Abierto. Pausando por ${this.recoveryTimeout / 1000}s`, 'color: yellow;');
         }
     }
 }
@@ -89,7 +91,7 @@ function cargarJSONP(url) {
         script.src = `${url}&output=jsonp&callback=${nombreCallback}`;
         script.onerror = () => {
             limpiar();
-            reject(new Error('Error de red al cargar JSONP'));
+            reject(new Error('Error de Conexión'));
         };
         document.body.appendChild(script);
     });
@@ -140,15 +142,30 @@ btn.addEventListener('click', async () => {
                 <img src="${cancion.album.cover_medium}" alt="${cancion.title}">
                 <h3>${cancion.title}</h3>
                 <p>${cancion.artist.name}</p>
-                <audio controls src="${cancion.preview}"></audio>
+                <audio controls preload="none" src="${cancion.preview}"></audio>
             `;
             contenedor.appendChild(card);
         });
 
     } catch (error) {
-        console.error(error);
+        // Error controlado sin ensuciar la consola
+        console.log(`%cError controlado: ${error.message}`, 'color: grey; font-style: italic;');
         if (error.isCircuitBreakerOpen) {
-            contenedor.innerHTML = `<p style="color: red; font-weight: bold;">⚠️ Sistema pausado: ${error.message}</p>`;
+            // contenedor.innerHTML = `<p style="color: darkred; font-weight: bold; padding: 10px; background: #fff0f0; border: 1px solid #ffcccc; border-radius: 5px;">${error.message}</p>`;
+            contenedor.innerHTML = `<p style="color: darkred; font-weight: bold; padding: 10px; background: #fff0f0; border: 1px solid #ffcccc; border-radius: 5px; text-align: center; font-size: 8px;">
+                 ▄██████████▄     <br>
+               ▄██████████████▄   <br>
+              ██████████████████  <br>
+             ▐███▀▀▀▀▀██▀▀▀▀▀███▌ <br>
+             ███▒▒▌■▐▒▒▒▒▌■▐▒▒███ <br>
+             ▐██▄▒▀▀▀▒▒▒▒▀▀▀▒▄██▌ <br>
+              ▀████▒▄▄▒▒▄▄▒████▀  <br>
+              ▐███▒▒▒▀▒▒▀▒▒▒███▌  <br>
+              ███▒▒▒▒▒▒▒▒▒▒▒▒███  <br>
+               ██▒▒▀▀▀▀▀▀▀▀▒▒██   <br>
+               ▐██▄▒▒▒▒▒▒▒▒▄██▌   <br>
+                ▀████████████▀    </p>`;
+
         } else {
             contenedor.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
         }
