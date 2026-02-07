@@ -47,13 +47,11 @@ class CircuitBreaker {
 
     failure() {
         this.failureCount++;
-        // Log estilizado: Naranja para advertencia
         console.log(`%cCircuit Breaker: Fallo ${this.failureCount}/${this.failureThreshold}`, 'color: red;');
 
         if (this.failureCount >= this.failureThreshold) {
             this.state = 'OPEN';
             this.nextAttempt = Date.now() + this.recoveryTimeout;
-            // Log estilizado: Rojo pero como log informativo
             console.log(`%cCircuit Breaker: Abierto. Pausando por ${this.recoveryTimeout / 1000}s`, 'color: yellow;');
         }
     }
@@ -97,9 +95,26 @@ function cargarJSONP(url) {
     });
 }
 
+// Retry
+async function retry(fn, retries = 3, delay = 1000) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (i < retries - 1) {
+                console.log(`%cReintentando petición... (${i + 1}/${retries})`, 'color: orange;');
+                await new Promise(res => setTimeout(res, delay));
+            } else {
+                throw error; 
+            }
+        }
+    }
+}
+
 async function realizarBusqueda(busqueda) {
     const urlBusqueda = `https://api.deezer.com/search/artist?q=${encodeURIComponent(busqueda)}`;
-    const dataBusqueda = await cargarJSONP(urlBusqueda);
+
+    const dataBusqueda = await retry(() => cargarJSONP(urlBusqueda), 3, 1000);
 
     if (!dataBusqueda.data || dataBusqueda.data.length === 0) {
         throw new Error("Artista no encontrado");
@@ -107,7 +122,8 @@ async function realizarBusqueda(busqueda) {
 
     const artistaExacto = dataBusqueda.data[0];
     const urlTracks = `https://api.deezer.com/artist/${artistaExacto.id}/top?limit=20`;
-    const dataTracks = await cargarJSONP(urlTracks);
+
+    const dataTracks = await retry(() => cargarJSONP(urlTracks), 3, 1000);
 
     if (dataTracks.error) {
         throw new Error(dataTracks.error.message);
@@ -148,7 +164,6 @@ btn.addEventListener('click', async () => {
         });
 
     } catch (error) {
-        // Error controlado sin ensuciar la consola
         console.log(`%cError controlado: ${error.message}`, 'color: grey; font-style: italic;');
         if (error.isCircuitBreakerOpen) {
             // contenedor.innerHTML = `<p style="color: darkred; font-weight: bold; padding: 10px; background: #fff0f0; border: 1px solid #ffcccc; border-radius: 5px;">${error.message}</p>`;
